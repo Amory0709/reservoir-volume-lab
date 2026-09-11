@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#10161d">
+  <meta name="description" content="RESQML 文件导入与千万级油藏网格体渲染。支持 1M、10M、20M 单元、孔隙度筛选、剖切与本机性能测试。">
+  <title>油藏体渲染 · Reservoir Volume</title>
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header class="header">
+    <div class="brand"><img src="./icon.svg" width="34" height="34" alt=""><div><strong>RESERVOIR<span> / </span>VOLUME</strong><small>千万级油藏网格 · 体渲染实验</small></div></div>
+    <div class="header-note"><span class="synthetic" id="data-source">合成数据</span><span>10M / 20M · CELL MARCHING</span></div>
+  </header>
+  <main class="workspace">
+    <aside class="panel" aria-label="渲染设置">
+      <div class="panel-heading"><div class="eyebrow">DISPLAY</div><h1>看清每一个单元</h1><p>千万级单元，逐格属性与真实边界。</p></div>
+      <section class="section import-section" aria-label="导入 RESQML">
+        <label for="resqml-files">导入 RESQML</label>
+        <input id="resqml-files" type="file" accept=".epc,.h5,.hdf5,.hdf" multiple>
+        <p class="hint">同时选择一个 EPC 和它引用的 HDF5 文件。文件在本机解析。</p>
+        <p id="import-status" class="hint" role="status" aria-live="polite">支持 IJK 六面体网格；先读取模型列表，再选择属性。</p>
+        <div id="import-options" hidden>
+          <label for="import-grid">文件中的网格</label><select id="import-grid"></select>
+          <label for="import-phi">孔隙度属性</label><select id="import-phi"></select>
+          <label for="import-phi-unit">孔隙度单位</label><select id="import-phi-unit"><option value="auto">使用文件单位</option><option value="fraction">小数 · 0–1</option><option value="percent">百分数 · 0–100</option></select>
+          <label for="import-so">含油饱和度属性</label><select id="import-so"></select>
+          <label for="import-k">渗透率属性</label><select id="import-k"></select>
+          <label for="import-active">活动单元属性</label><select id="import-active"></select>
+          <label for="import-active-mode">活动标志含义</label><select id="import-active-mode"><option value="positive">正数表示活动</option><option value="zero">0 表示活动 · inactive 标志</option></select>
+          <button id="import-render" type="button">加载并渲染</button>
+        </div>
+        <button id="import-cancel" type="button" hidden>取消导入</button>
+      </section>
+      <div class="scale-section">
+        <label for="model-scale">网格规模</label>
+        <select id="model-scale"><optgroup label="显式角点 · Float32"><option value="explicit-1m">1M · 显式角点</option><option value="explicit-10m" selected>10M · 显式角点</option><option value="explicit-20m">20M · 显式角点压力测试</option></optgroup><optgroup label="紧凑模型 · 对照"><option value="1m">1M · 紧凑模型</option><option value="10m">10M · 紧凑模型</option><option value="20m">20M · 紧凑模型</option><option value="legacy">原始演示 · 2,862 格</option></optgroup></select>
+        <p class="hint" id="model-note">共享 XYZ 角点 · 断层拆点 · Float32 属性</p>
+      </div>
+      <fieldset class="presets"><legend>观察方式</legend><div class="segmented"><button type="button" data-preset="solid" class="active" aria-pressed="true">单元体</button><button type="button" data-preset="volume" aria-pressed="false">半透明</button><button type="button" data-preset="cut" aria-pressed="false">剖切</button></div></fieldset>
+      <div class="section filter-section">
+        <label class="toggle"><span>孔隙度筛选 <span class="phi-symbol">φ</span></span><input type="checkbox" id="porosity-filter" checked><span class="switch" aria-hidden="true"></span></label>
+        <div class="range-label"><label for="porosity-min">下限</label><span class="number-field"><input id="porosity-min" type="number" min="8" max="32" step="0.001" value="8" inputmode="decimal"><span>%</span></span></div>
+        <input id="porosity-min-slider" type="range" min="8" max="32" step="0.1" value="8" aria-label="孔隙度下限滑块">
+        <div class="range-label"><label for="porosity-max">上限</label><span class="number-field"><input id="porosity-max" type="number" min="8" max="32" step="0.001" value="32" inputmode="decimal"><span>%</span></span></div>
+        <input id="porosity-max-slider" type="range" min="8" max="32" step="0.1" value="32" aria-label="孔隙度上限滑块">
+        <div class="filter-summary"><output id="filter-count" for="porosity-min porosity-max porosity-min-slider porosity-max-slider">全部单元</output><button type="button" id="filter-reset">重置</button></div>
+        <p class="hint">仅统计剖切前匹配的活动单元。可继续用任意属性着色。</p><p class="hint" id="filter-progress" role="status" aria-live="polite">拖动时显示表面预览，停止后恢复体积与内部边线。</p>
+      </div>
+      <div class="section"><label for="property">显示属性</label><select id="property"><option value="0">含油饱和度 · So</option><option value="1">孔隙度 · φ</option><option value="2">渗透率 · K</option></select><p class="hint" id="property-note">单元内保持常值，保留属性突变。</p>
+        <div class="range-label"><label for="density">体密度</label><output id="density-value" for="density">60%</output></div><input id="density" type="range" min="0" max="100" value="60"><div class="range-ends"><span>通透</span><span>厚实</span></div>
+      </div>
+      <div class="section">
+        <label class="toggle"><span>保留网格边线</span><input type="checkbox" id="edges" checked><span class="switch" aria-hidden="true"></span></label>
+        <div class="range-label"><label for="line-width">边线宽度</label><output id="line-width-value" for="line-width">1.2 px</output></div><input id="line-width" type="range" min="0.5" max="2.5" step="0.1" value="1.2">
+        <label class="check"><input type="checkbox" id="interior" checked><span>显示透过体积可见的内部边线</span></label>
+      </div>
+      <div class="section">
+        <div class="section-title"><label for="clip-axis">剖切方向</label><span class="badge" id="clip-badge">完整体积</span></div>
+        <select id="clip-axis"><option value="0">不剖切</option><option value="1">X 方向</option><option value="2">Y 方向</option><option value="3">Z 方向 · 由上向下</option></select>
+        <div class="range-label"><label for="clip">裁去比例</label><output id="clip-value" for="clip">0%</output></div><input id="clip" type="range" min="0" max="90" value="0" disabled><p class="hint">剖面也保留单元之间的边界。</p>
+      </div>
+      <div class="section performance-section" id="performance-section">
+        <label for="quality">渲染分辨率</label><select id="quality"><option value="fast" selected>流畅 · 24 万像素</option><option value="balanced">均衡 · 52 万像素</option><option value="detail">精细 · 120 万像素</option></select>
+        <p class="hint">静止画质不减少网格单元。显式模式拖动时显示低分辨率表面预览，松手后立即开始细化，恢复完整体积与内部边线。</p>
+        <button type="button" id="benchmark">测试完整体积帧率</button><output id="benchmark-result" aria-live="polite">尚未测试</output>
+      </div>
+      <div class="panel-foot"><details><summary>网格与渲染说明</summary><div class="details-content"><p id="geometry-description">大规模版本采用不等距坐标、分段线性地层起伏、倾斜柱线与两个错动断层块。每个单元都有独立的合成属性。</p><p id="storage-description">角点与属性使用 Float32，统计使用实际存储值。</p><p>光线逐格积分，按孔隙度范围跳过整块空区。只画真实单元边与剖面交线，边线参与体积遮挡。</p><p>远景中的细线会做抗锯齿；当单元小于像素时，请放大或剖切查看。GPU 数据量不包含驱动与画布开销，CPU 另保留孔隙度计数索引。</p><p>可选择合成模型，或导入 RESQML 2.0 / 2.0.1 的 IJK 网格。支持显式 XYZ、两控制点直线柱参数化和 Lattice 几何；不支持曲线柱及截断网格。显式模式保留 IJK 邻接，不代表任意多面体网格。10M / 20M 是含非活动单元的总数；本机帧率需实测。</p><a id="research-link" href="https://web.tecgraf.puc-rio.br/" target="_blank" rel="noreferrer">相关研究：PUC-Rio / Tecgraf ↗</a></div></details></div>
+    </aside>
+    <section class="viewer" aria-label="三维油藏视图">
+      <canvas id="volume" tabindex="0" aria-label="三维油藏。拖动旋转，滚轮缩放，Shift 拖动平移。方向键旋转，加减号缩放，R 复位。"></canvas>
+      <div class="view-heading"><span class="eyebrow">FAULTED RESERVOIR</span><h2 id="model-title">断层油藏</h2><p><span id="cell-count">正在生成 10M 网格…</span><span class="dot-separator">/</span><span>不规则六面体</span></p></div>
+      <div class="view-tools" role="group" aria-label="视角"><button type="button" data-view="iso" title="等轴测视角" aria-label="等轴测视角" class="active">3D</button><button type="button" data-view="top" title="俯视" aria-label="俯视">顶</button><button type="button" data-view="front" title="正视" aria-label="正视">正</button><span></span><button type="button" id="reset" title="复位视图" aria-label="复位视图">↺</button></div>
+      <div class="status" id="status" role="status"><span class="loader"></span><span id="loading-text">正在生成 10M 网格…</span></div>
+      <div class="metrics" id="metrics" aria-label="渲染统计"><div><span>GPU 数据</span><strong id="memory-stat">—</strong></div><div><span>准备 / 上传</span><strong id="load-stat">—</strong></div><div><span>渲染尺寸</span><strong id="resolution-stat">—</strong></div><div><span>最近 GPU 耗时</span><strong id="gpu-stat">等待设备计时</strong></div></div>
+      <div class="empty-filter" id="empty-filter" role="status" hidden><strong>没有匹配的网格单元</strong><p>请调宽孔隙度范围，或重置筛选。</p><button type="button" id="empty-filter-reset">重置筛选</button></div>
+      <div class="error" id="error" role="alert" hidden><strong>三维视图暂时无法显示</strong><p id="error-text"></p><button type="button" id="retry">重新加载</button></div>
+      <div class="legend"><div class="legend-title"><strong id="legend-name">含油饱和度</strong><span id="legend-unit">So · 无量纲</span></div><div class="colorbar"></div><div class="legend-ticks" id="legend-ticks"><span>0.05</span><span>0.25</span><span>0.45</span><span>0.65</span><span>0.85</span></div></div>
+      <div class="view-bottom"><span class="gesture desktop">拖动旋转 <b>·</b> 滚轮缩放 <b>·</b> Shift 拖动平移</span><span class="gesture mobile">单指旋转 <b>·</b> 双指缩放与平移</span><span class="render-note" id="render-note">单元边界积分</span></div>
+      <div class="axis-key" aria-label="坐标方向">X <i></i> Y <i></i> Z ↑</div>
+    </section>
+  </main>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

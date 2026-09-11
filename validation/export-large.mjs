@@ -1,0 +1,11 @@
+import {mkdirSync,writeFileSync} from 'node:fs';
+import {resolve} from 'node:path';
+import {makeLargeGrid} from '../dist/large-grid.js';
+import {vertexShader,largeFragmentShader} from '../dist/large-shaders.js';
+const dir=process.argv[2];if(!dir)throw new Error('Provide a scratch output directory.');mkdirSync(dir,{recursive:true});
+const volume=makeLargeGrid(process.argv[3]??'20m');
+writeFileSync(resolve(dir,'metadata.json'),JSON.stringify({dims:volume.dims,coarse:volume.coarse,bounds:volume.bounds,stats:volume.stats,axisWidth:volume.axisData.length/4,foldWidth:volume.foldData.length/4}));
+for(const key of ['attributes','bricks','axisData','foldData'])writeFileSync(resolve(dir,key+'.bin'),Buffer.from(volume[key].buffer));
+writeFileSync(resolve(dir,'vertex.glsl'),vertexShader);writeFileSync(resolve(dir,'fragment.glsl'),largeFragmentShader);
+writeFileSync(resolve(dir,'alpha.glsl'),largeFragmentShader.replace('outColor=vec4(acc.rgb+(1.0-acc.a)*bg,1);','outColor=vec4(vec3(acc.a),1);').replaceAll('outColor=vec4(bg,1);','outColor=vec4(0,0,0,1);'));
+console.log(volume.stats);

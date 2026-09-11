@@ -1,0 +1,8 @@
+{
+  "name": "reservoir-volume-lab",
+  "private": true,
+  "type": "module",
+  "scripts": {"vendor": "node scripts/vendor-resqml.mjs"},
+  "dependencies": {"h5wasm": "0.10.3", "fflate": "0.8.3", "@xmldom/xmldom": "0.9.12"},
+  "devDependencies": {"esbuild": "0.28.2"}
+}
