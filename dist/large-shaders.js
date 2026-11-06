@@ -14,7 +14,7 @@ uniform ivec2 uPhi;
 uniform vec2 uResolution;
 uniform vec3 uEye,uForward,uRight,uUp,uBoundsMin,uBoundsMax;
 uniform float uTanFov,uDensity,uEdgeWidth,uPixelRatio,uClipPosition;
-uniform int uProperty,uPorosityFilter,uEdges,uInterior,uClipAxis,uSkipBricks;
+uniform int uProperty,uPorosityFilter,uEdges,uInterior,uClipAxis,uSkipBricks,uLightMode;
 out vec4 outColor;
 const float INF=1e25,EPS=1e-6;
 const int B=10;
@@ -107,7 +107,8 @@ void fineBrick(vec3 ro,vec3 rd,float a,float b,ivec3 brick,vec2 slopes,int block
       float scalar=float(property[uProperty])/255.0;
       float lighting=.66+.34*max(0.0,dot(normal,normalize(vec3(-.3,-.5,.85))));
       if(uEdges==1&&(uInterior==1||!visible))gridLine(acc,entry,lo,hi,slopes,current,visible,section);
-      composite(acc,ramp(scalar)*lighting,1.0-exp(-uDensity*(.8+.4*scalar)*(end-current)));
+      composite(acc,ramp(scalar)*lighting,uDensity>=28.0?1.0:1.0-exp(-uDensity*(.8+.4*scalar)*(end-current)));
+      if(acc.a>=1.0)break;
       ivec3 after=cell;for(int axis=0;axis<3;axis++)if(next[axis]<=end+EPS*.2)after[axis]+=step[axis];
       bool exposed=!inBlock(after,block);
       if(!exposed&&any(notEqual(after,cell)))exposed=!matches(texelFetch(uAttributes,after,0));

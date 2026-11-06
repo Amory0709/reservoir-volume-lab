@@ -7,12 +7,13 @@
   <meta name="description" content="RESQML 文件导入与千万级油藏网格体渲染。支持 1M、10M、20M 单元、孔隙度筛选、剖切与本机性能测试。">
   <title>油藏体渲染 · Reservoir Volume</title>
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <script src="./theme.js"></script>
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
   <header class="header">
     <div class="brand"><img src="./icon.svg" width="34" height="34" alt=""><div><strong>RESERVOIR<span> / </span>VOLUME</strong><small>千万级油藏网格 · 体渲染实验</small></div></div>
-    <div class="header-note"><span class="synthetic" id="data-source">合成数据</span><span>10M / 20M · CELL MARCHING</span></div>
+    <div class="header-actions"><div class="header-note"><span class="synthetic" id="data-source">合成数据</span><span>10M / 20M · CELL MARCHING</span></div><button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换至浅色模式" title="切换至浅色模式"><span aria-hidden="true" class="theme-icon">☀</span><span class="theme-label">浅色</span></button></div>
   </header>
   <main class="workspace">
     <aside class="panel" aria-label="渲染设置">
@@ -35,6 +36,9 @@
         <button id="import-cancel" type="button" hidden>取消导入</button>
       </section>
       <div class="scale-section">
+        <div class="engine-controls"><span id="engine-status" role="status">WebGL2</span><a id="engine-switch" href="?backend=webgpu">试用 WebGPU</a></div>
+        <p class="hint"><a id="compare-view" href="./compare.html">左右对比：体积 / 表皮 →</a></p>
+        <p class="hint">切换引擎会重新加载页面，导入的文件需重新选择。请用相同规模、分辨率和筛选条件比较性能。</p>
         <label for="model-scale">网格规模</label>
         <select id="model-scale"><optgroup label="显式角点 · Float32"><option value="explicit-1m">1M · 显式角点</option><option value="explicit-10m" selected>10M · 显式角点</option><option value="explicit-20m">20M · 显式角点压力测试</option></optgroup><optgroup label="紧凑模型 · 对照"><option value="1m">1M · 紧凑模型</option><option value="10m">10M · 紧凑模型</option><option value="20m">20M · 紧凑模型</option><option value="legacy">原始演示 · 2,862 格</option></optgroup></select>
         <p class="hint" id="model-note">共享 XYZ 角点 · 断层拆点 · Float32 属性</p>
@@ -47,10 +51,17 @@
         <div class="range-label"><label for="porosity-max">上限</label><span class="number-field"><input id="porosity-max" type="number" min="8" max="32" step="0.001" value="32" inputmode="decimal"><span>%</span></span></div>
         <input id="porosity-max-slider" type="range" min="8" max="32" step="0.1" value="32" aria-label="孔隙度上限滑块">
         <div class="filter-summary"><output id="filter-count" for="porosity-min porosity-max porosity-min-slider porosity-max-slider">全部单元</output><button type="button" id="filter-reset">重置</button></div>
-        <p class="hint">仅统计剖切前匹配的活动单元。可继续用任意属性着色。</p><p class="hint" id="filter-progress" role="status" aria-live="polite">拖动时显示表面预览，停止后恢复体积与内部边线。</p>
+        <p class="hint">仅统计剖切前匹配的活动单元。可继续用任意属性着色。</p><p class="hint" id="filter-progress" role="status" aria-live="polite">表面缓存完成后，拖动保持清晰，停止后显示内部体积。</p>
       </div>
       <div class="section"><label for="property">显示属性</label><select id="property"><option value="0">含油饱和度 · So</option><option value="1">孔隙度 · φ</option><option value="2">渗透率 · K</option></select><p class="hint" id="property-note">单元内保持常值，保留属性突变。</p>
-        <div class="range-label"><label for="density">体密度</label><output id="density-value" for="density">60%</output></div><input id="density" type="range" min="0" max="100" value="60"><div class="range-ends"><span>通透</span><span>厚实</span></div>
+        <div class="range-label"><label for="density">体密度</label><output id="density-value" for="density">60%</output></div><input id="density" type="range" min="0" max="100" value="60"><div class="range-ends"><span>通透</span><span>完全不透明</span></div>
+        <div id="surface-controls" hidden>
+          <div class="range-label"><label for="surface-transparency">表皮透明度</label><output id="surface-transparency-value" for="surface-transparency">0%</output></div>
+          <input id="surface-transparency" type="range" min="0" max="100" step="1" value="0" aria-describedby="surface-hint">
+          <div class="range-ends"><span>不透明</span><span>完全透明</span></div>
+          <label class="check"><input type="checkbox" id="surface-only"><span>仅显示表皮</span></label>
+          <p class="hint" id="surface-hint">调节时自动停留在表皮。网格线可独立开关。</p>
+        </div>
       </div>
       <div class="section">
         <label class="toggle"><span>保留网格边线</span><input type="checkbox" id="edges" checked><span class="switch" aria-hidden="true"></span></label>
@@ -64,7 +75,9 @@
       </div>
       <div class="section performance-section" id="performance-section">
         <label for="quality">渲染分辨率</label><select id="quality"><option value="fast" selected>流畅 · 24 万像素</option><option value="balanced">均衡 · 52 万像素</option><option value="detail">精细 · 120 万像素</option></select>
-        <p class="hint">静止画质不减少网格单元。显式模式拖动时显示低分辨率表面预览，松手后立即开始细化，恢复完整体积与内部边线。</p>
+        <p class="hint">静止画质不减少网格单元。显式模式使用缓存表面保持旋转清晰；筛选和剖切变化时会重新缓存，完成后恢复完整体积。</p>
+        <div id="block-controls" hidden><label class="check"><input id="block-traversal" type="checkbox"><span>分块加速（实验）</span></label><p class="hint">旋转复用空间索引。取消勾选可与原算法对比，清晰度不变。</p></div>
+        <div id="progressive-controls" hidden><label class="check"><input id="progressive-volume" type="checkbox" aria-describedby="progressive-hint"><span>渐进显示体积</span></label><p class="hint" id="progressive-hint">表皮就绪后，从画面中央逐块显示内部体积，未完成区域保留表皮。仅显示表皮时不计算体积。</p></div>
         <button type="button" id="benchmark">测试完整体积帧率</button><output id="benchmark-result" aria-live="polite">尚未测试</output>
       </div>
       <div class="panel-foot"><details><summary>网格与渲染说明</summary><div class="details-content"><p id="geometry-description">大规模版本采用不等距坐标、分段线性地层起伏、倾斜柱线与两个错动断层块。每个单元都有独立的合成属性。</p><p id="storage-description">角点与属性使用 Float32，统计使用实际存储值。</p><p>光线逐格积分，按孔隙度范围跳过整块空区。只画真实单元边与剖面交线，边线参与体积遮挡。</p><p>远景中的细线会做抗锯齿；当单元小于像素时，请放大或剖切查看。GPU 数据量不包含驱动与画布开销，CPU 另保留孔隙度计数索引。</p><p>可选择合成模型，或导入 RESQML 2.0 / 2.0.1 的 IJK 网格。支持显式 XYZ、两控制点直线柱参数化和 Lattice 几何；不支持曲线柱及截断网格。显式模式保留 IJK 邻接，不代表任意多面体网格。10M / 20M 是含非活动单元的总数；本机帧率需实测。</p><a id="research-link" href="https://web.tecgraf.puc-rio.br/" target="_blank" rel="noreferrer">相关研究：PUC-Rio / Tecgraf ↗</a></div></details></div>
@@ -80,6 +93,7 @@
       <div class="legend"><div class="legend-title"><strong id="legend-name">含油饱和度</strong><span id="legend-unit">So · 无量纲</span></div><div class="colorbar"></div><div class="legend-ticks" id="legend-ticks"><span>0.05</span><span>0.25</span><span>0.45</span><span>0.65</span><span>0.85</span></div></div>
       <div class="view-bottom"><span class="gesture desktop">拖动旋转 <b>·</b> 滚轮缩放 <b>·</b> Shift 拖动平移</span><span class="gesture mobile">单指旋转 <b>·</b> 双指缩放与平移</span><span class="render-note" id="render-note">单元边界积分</span></div>
       <div class="axis-key" aria-label="坐标方向">X <i></i> Y <i></i> Z ↑</div>
+      <progress id="volume-progress" class="volume-progress" max="1" value="0" aria-label="完整体积计算进度" hidden></progress>
     </section>
   </main>
   <script type="module" src="./app.js"></script>

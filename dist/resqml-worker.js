@@ -1,5 +1,6 @@
 import {inspectEpc} from './resqml-package.js';
 import {importResqmlGrid} from './resqml-import.js';
+import {attachBlockIndex,blockIndexTransfers} from './block-index.js';
 let pkg,files=[];
 self.onmessage=async event=>{
   const {type,selection,limits}=event.data;
@@ -21,8 +22,9 @@ self.onmessage=async event=>{
         const dir='/resqml_'+mounts.length;FS.mkdir(dir);FS.mount(FS.filesystems.WORKERFS,{files:[file]},dir);mounts.push(dir);
         const handle=new h5.File(dir+'/'+file.name,'r');opened.set(file,handle);return handle;
       };
-      const volume=importResqmlGrid(pkg,selection,openFile,(fraction,phase)=>self.postMessage({type:'progress',fraction,phase}),limits);
-      self.postMessage({type:'ready',volume},['vertices','attributes','nodes','ranges','sortedPhi','columnPillars','kInterfaces'].map(k=>volume[k].buffer));
+      const volume=importResqmlGrid(pkg,selection,openFile,(fraction,phase)=>self.postMessage({type:'progress',fraction:event.data.backend==='webgpu'?fraction:fraction*.98,phase}),limits);
+      if(event.data.backend!=='webgpu'){self.postMessage({type:'progress',fraction:.99,phase:'缓存断层块空间索引'});attachBlockIndex(volume);}
+      self.postMessage({type:'ready',volume},[...['vertices','attributes','nodes','ranges','sortedPhi','columnPillars','kInterfaces'].map(k=>volume[k].buffer),...blockIndexTransfers(volume)]);
     }finally{for(const f of opened.values())f.close();for(const dir of mounts){FS.unmount(dir);FS.rmdir(dir);}}
   }catch(error){self.postMessage({type:'error',message:error.message||'RESQML 解析失败，请检查 EPC 与 HDF5 文件。'});}
 };

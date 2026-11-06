@@ -20,7 +20,8 @@ assert egl('eglInitialize',U,[P,c.POINTER(I),c.POINTER(I)])(d,c.byref(major),c.b
 assert egl('eglBindAPI',U,[U])(0x30a0)
 attrs=(I*15)(0x3040,0x40,0x3033,1,0x3024,8,0x3023,8,0x3022,8,0x3021,8,0x3025,0,0x3038)
 config=P();n=I();assert egl('eglChooseConfig',U,[P,c.POINTER(I),c.POINTER(P),I,c.POINTER(I)])(d,attrs,c.byref(config),1,c.byref(n)) and n.value
-w,h=96,72
+w,h=int(os.environ.get('RENDER_WIDTH',96)),int(os.environ.get('RENDER_HEIGHT',72))
+assert 0<w<=4096 and 0<h<=4096
 surface=egl('eglCreatePbufferSurface',P,[P,P,c.POINTER(I)])(d,config,(I*5)(0x3057,w,0x3056,h,0x3038))
 context=egl('eglCreateContext',P,[P,P,P,c.POINTER(I)])(d,config,None,(I*3)(0x3098,3,0x3038))
 assert surface and context

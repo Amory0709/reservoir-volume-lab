@@ -13,14 +13,14 @@ precision highp usampler2D;
 uniform sampler3D uAttributes,uVertices;
 uniform sampler2D uNodes,uRanges;
 uniform highp usampler2D uColumnPillars,uKInterfaces;
-uniform int uImported,uPropertyLog;
+uniform int uImported,uPropertyLog,uFastConnections;
 uniform vec2 uPropertyRange;
 uniform ivec3 uDimensions,uSplits;
 uniform int uNodeWidth,uNodeCount,uCellCount,uSkipBricks,uNoMatches,uSurfacePreview;
 uniform vec2 uPhi,uResolution;
 uniform vec3 uEye,uForward,uRight,uUp,uBoundsMin,uBoundsMax;
 uniform float uTanFov,uDensity,uEdgeWidth,uPixelRatio,uClipPosition;
-uniform int uProperty,uPorosityFilter,uEdges,uInterior,uClipAxis;
+uniform int uProperty,uPorosityFilter,uEdges,uInterior,uClipAxis,uLightMode;
 out vec4 outColor;
 const float INF=1e25,EPS=1.5e-6;
 ${table('ivec3','CORNERS',CORNERS)}
@@ -28,6 +28,7 @@ ${table('ivec3','TRIANGLES',FACES)}
 ${table('ivec2','EDGES',EDGES)}
 const ivec3 NEIGHBORS[6]=ivec3[6](ivec3(0,0,-1),ivec3(0,0,1),ivec3(0,-1,0),ivec3(0,1,0),ivec3(-1,0,0),ivec3(1,0,0));
 vec3 v[8];float winding=1.0;
+vec3 rayVertex[8];int rayKz;float rayDirectionZ;
 ${ramp}
 ${background}
 vec4 node(int index){return texelFetch(uNodes,ivec2(index%uNodeWidth,index/uNodeWidth),0);}
@@ -51,34 +52,66 @@ vec3 propertyColor(vec4 p){
   return ramp(range.y>range.x?(raw-range.x)/(range.y-range.x):.5);
 }
 // Outward-wound triangles. The face diagonal is never drawn as a grid edge.
+bool projectCell(vec3 ro,vec3 rd){
+  // Eight shared vertices, projected once per cell instead of 36 times.
+  vec3 ad=abs(rd);rayKz=ad.x>ad.y?(ad.x>ad.z?0:2):(ad.y>ad.z?1:2);
+  int kx=(rayKz+1)%3,ky=(kx+1)%3;rayDirectionZ=rd[rayKz];
+  vec2 shear=vec2(rd[kx],rd[ky])/rayDirectionZ,lo=vec2(INF),hi=vec2(-INF);
+  ${CORNERS.map((_,i)=>`{
+    const int i=${i};
+    vec3 a=v[i]-ro;vec2 projected=vec2(a[kx],a[ky])-shear*a[rayKz];
+    rayVertex[i]=vec3(projected,a[rayKz]);lo=min(lo,projected);hi=max(hi,projected);
+  }`).join('\n')}
+  // The ray is the origin in this projection. Reject cells whose projected
+  // bounds cannot contain it before testing any of their twelve triangles.
+  return all(lessThanEqual(lo,vec2(0)))&&all(greaterThanEqual(hi,vec2(0)));
+}
 bool triangle(vec3 ro,vec3 rd,int i,out float t,out vec3 normal){
-  ivec3 tri=TRIANGLES[i];vec3 a=v[tri.x]-ro,b=v[tri.y]-ro,c=v[tri.z]-ro;
+  ivec3 tri=TRIANGLES[i];vec3 a=rayVertex[tri.x],b=rayVertex[tri.y],c=rayVertex[tri.z];
   // Project along the dominant ray component. Shared edges use the same
   // endpoint arithmetic; no expanded barycentric epsilon creates false hits.
-  vec3 ad=abs(rd);int kz=ad.x>ad.y?(ad.x>ad.z?0:2):(ad.y>ad.z?1:2);
-  int kx=(kz+1)%3,ky=(kx+1)%3;vec2 shear=vec2(rd[kx],rd[ky])/rd[kz];
-  vec2 pa=vec2(a[kx],a[ky])-shear*a[kz],pb=vec2(b[kx],b[ky])-shear*b[kz],pc=vec2(c[kx],c[ky])-shear*c[kz];
+  vec2 pa=a.xy,pb=b.xy,pc=c.xy;
   float u=pc.x*pb.y-pc.y*pb.x,w=pb.x*pa.y-pb.y*pa.x,q=pa.x*pc.y-pa.y*pc.x;
   if((min(u,min(w,q))<0.0&&max(u,max(w,q))>0.0))return false;
   float det=u+w+q;if(det==0.0)return false;
-  t=(u*a[kz]+q*b[kz]+w*c[kz])/(det*rd[kz]);
+  t=(u*a.z+q*b.z+w*c.z)/(det*rayDirectionZ);
   normal=winding*cross(v[tri.y]-v[tri.x],v[tri.z]-v[tri.x]);return true;
 }
-bool cellInterval(ivec3 c,vec3 ro,vec3 rd,float lower,float upper,out float a,out float b,out vec3 normal,out int face){
-  corners(c);float entries[12],front=-INF,back=INF;int bf=-1,entry=-1;
-  for(int i=0;i<12;i++){
-    entries[i]=-INF;float t;vec3 n;if(!triangle(ro,rd,i,t,n))continue;
-    if(dot(n,rd)<0.0)entries[i]=t;
-    else if(t>=lower-EPS&&t<back){back=t;bf=i/2;}
-  }
+bool cachedInterval(ivec3 c,vec3 ro,vec3 rd,float lower,float upper,out float a,out float b,out vec3 normal,out int face){
+  if(!projectCell(ro,rd))return false;
+  float entries[12],front=-INF,back=INF;int bf=-1,entry=-1;
+  ${FACES.map((_,i)=>`{
+    const int i=${i};entries[i]=-INF;float t;vec3 n;
+    if(triangle(ro,rd,i,t,n)){
+      if(dot(n,rd)<0.0)entries[i]=t;
+      else if(t>=lower-EPS&&t<back){back=t;bf=i/2;}
+    }
+  }`).join('\n')}
   // Require a real entering face even if it is behind lower/the camera.
   // A lone exit hit must never turn the entire eye-to-cell distance opaque.
-  for(int i=0;i<12;i++)if(entries[i]<=back&&entries[i]>front){front=entries[i];entry=i;}
+  ${FACES.map((_,i)=>`if(entries[${i}]<=back&&entries[${i}]>front){front=entries[${i}];entry=${i};}`).join('\n')}
   if(entry<0||back>=INF)return false;
   ivec3 tri=TRIANGLES[entry];normal=normalize(winding*cross(v[tri.y]-v[tri.x],v[tri.z]-v[tri.x]));
   a=max(lower,front);
   b=min(back,upper);face=back>upper? -1:bf;
   return a<INF&&b>a+EPS&&back<INF;
+}
+bool cellInterval(ivec3 c,vec3 ro,vec3 rd,float lower,float upper,out float a,out float b,out vec3 normal,out int face){
+  corners(c);return cachedInterval(c,ro,rd,lower,upper,a,b,normal,face);
+}
+// Four vertices on a shared face are already resident from the last cell.
+void advanceCorners(ivec3 cell,int crossedFace){
+  winding=1.0;ivec3 n=cell+ivec3(blockX(cell.x),int(cell.y>=uDimensions.y/2),0);
+  uvec4 pillars=uvec4(0);uvec2 layers=uvec2(0);int textureWidth=1;
+  if(uImported==1){pillars=texelFetch(uColumnPillars,cell.xy,0);layers=texelFetch(uKInterfaces,ivec2(cell.z,0),0).rg;textureWidth=textureSize(uVertices,0).x;winding=texelFetch(uAttributes,cell,0).a>1.5?-1.0:1.0;}
+  ${[[0,0,-1],[0,0,1],[0,-1,0],[0,1,0],[-1,0,0],[1,0,0]].map((delta,face)=>{
+    const pairs=CORNERS.map((c,i)=>[i,CORNERS.findIndex(p=>p.every((x,a)=>x===c[a]+delta[a]))]);
+    return `if(crossedFace==${face}){`+pairs.filter(p=>p[1]>=0).map(([i,j])=>`v[${i}]=v[${j}];`).join('')+
+      pairs.filter(p=>p[1]<0).map(([i])=>`if(uImported==1){int p=int(pillars[${i%4}]);v[${i}]=texelFetch(uVertices,ivec3(p%textureWidth,p/textureWidth,int(layers[${i>>2}])),0).xyz;}else v[${i}]=texelFetch(uVertices,n+CORNERS[${i}],0).xyz;`).join('')+'}';
+  }).join('\n')}
+}
+bool connectedInterval(ivec3 c,vec3 ro,vec3 rd,float lower,float upper,int crossedFace,out float a,out float b,out vec3 normal,out int face){
+  advanceCorners(c,crossedFace);return cachedInterval(c,ro,rd,lower,upper,a,b,normal,face);
 }
 float nodeNear(int id,vec3 ro,vec3 inv,float lower,float upper){
   vec2 range=rangeAt(id);if(range.x>range.y||(uSkipBricks==1&&uPorosityFilter==1&&(range.y<uPhi.x||range.x>uPhi.y)))return INF;
@@ -109,10 +142,10 @@ bool findCell(vec3 ro,vec3 rd,vec3 inv,float lower,float upper,out ivec3 cell,ou
   }
   return found;
 }
-float segmentDistance(vec3 p,vec3 a,vec3 b){vec3 d=b-a;return length(p-a-d*clamp(dot(p-a,d)/max(dot(d,d),1e-20),0.0,1.0));}
+float segmentDistanceSquared(vec3 p,vec3 a,vec3 b){vec3 d=b-a,q=p-a-d*clamp(dot(p-a,d)/max(dot(d,d),1e-20),0.0,1.0);return dot(q,q);}
 float gridDistance(vec3 p,bool section){
   float d=INF;
-  if(!section){for(int i=0;i<12;i++)d=min(d,segmentDistance(p,v[EDGES[i].x],v[EDGES[i].y]));}
+  if(!section){${EDGES.map(([a,b])=>`d=min(d,segmentDistanceSquared(p,v[${a}],v[${b}]));`).join('\n')}}
   else{
     int axis=uClipAxis-1;
     for(int i=0;i<12;i++){
@@ -121,16 +154,16 @@ float gridDistance(vec3 p,bool section){
         vec3 a=v[tri[j]],b=v[tri[(j+1)%3]];float da=a[axis]-uClipPosition,db=b[axis]-uClipPosition;
         if((da<=0.0&&db>0.0)||(db<=0.0&&da>0.0))points[count++]=mix(a,b,da/(da-db));
       }
-      if(count==2)d=min(d,segmentDistance(p,points[0],points[1]));
+      if(count==2)d=min(d,segmentDistanceSquared(p,points[0],points[1]));
     }
   }
-  return d;
+  return sqrt(d);
 }
 void composite(inout vec4 acc,vec3 color,float alpha){float w=(1.0-acc.a)*clamp(alpha,0.0,1.0);acc+=vec4(w*color,w);}
 void gridLine(inout vec4 acc,vec3 p,float t,bool interior,bool section){
   float pixel=max(1e-7,2.0*uTanFov*t/uResolution.y),size=INF;
-  for(int i=0;i<12;i++)size=min(size,length(v[EDGES[i].x]-v[EDGES[i].y]));
-  float width=min(uEdgeWidth*uPixelRatio*pixel,size*.19),d=gridDistance(p,section);
+  ${EDGES.map(([a,b])=>`{vec3 edge=v[${a}]-v[${b}];size=min(size,dot(edge,edge));}`).join('\n')}
+  float width=min(uEdgeWidth*uPixelRatio*pixel,sqrt(size)*.19),d=gridDistance(p,section);
   float coverage=(1.0-smoothstep(width*.2,width+pixel*.65,d))*min(1.0,width/(pixel*.55));
   float transparent=1.0-smoothstep(.4,5.0,uDensity);
   vec3 color=mix(vec3(.028,.045,.058),vec3(.39,.60,.64),transparent*(interior?1.0:.42));
@@ -155,10 +188,10 @@ void main(){
     else{float t=(uClipPosition-ro[axis])/rd[axis];if(rd[axis]<0.0)clipNear=max(0.0,t);else clipFar=t;}}
   if(clipFar<=clipNear||uNoMatches==1){outColor=vec4(bg,1);return;}
   vec4 acc=vec4(0);ivec3 cell;float a,b;vec3 normal;int face;
-  bool found=findCell(ro,rd,inv,clipNear,clipFar,cell,a,b,normal,face),continuous=false;
-  // Interaction preview uses the FIRST ACTUAL matching surface, including
-  // its real cell edges and clipping intersection. Full volume returns at rest.
-  if(uSurfacePreview==1){
+  bool found=findCell(ro,rd,inv,clipNear,clipFar,cell,a,b,normal,face),continuous=false,cornersReady=false;
+  // First matching surface for previews and the fully opaque density endpoint.
+  // This also handles missing surface caches without leaking rear cells.
+  if(uSurfacePreview==1||uDensity>=28.0){
     if(found){
       corners(cell);vec4 p=texelFetch(uAttributes,cell,0);
       bool section=uClipAxis>0&&clipNear>0.0&&abs(a-clipNear)<EPS*3.0;
@@ -170,7 +203,10 @@ void main(){
   }
   // Twelve triangles bound at most six disjoint ray intervals per cell.
   for(int step=0;step<uCellCount*6;step++){
-    if(!found||acc.a>.997)break;corners(cell);
+    if(!found||acc.a>.997)break;
+    // A successful adjacent-cell interval leaves its exact corners in v.
+    // BVH searches test multiple candidates, so those still reload the winner.
+    if(!cornersReady)corners(cell);cornersReady=false;
     vec4 property=texelFetch(uAttributes,cell,0);bool keep=matches(property);
     // Filtering changes visibility, not geometric adjacency. Walking through
     // excluded neighbors avoids restarting a multi-million-node BVH per gap.
@@ -184,11 +220,14 @@ void main(){
       composite(acc,propertyColor(property)*light,1.0-exp(-uDensity*(b-a)));
       if(uEdges==1&&!nextVisible){bool cut=uClipAxis>0&&abs(b-clipFar)<EPS*3.0;gridLine(acc,ro+rd*b,b,false,cut);}
     }
-    if(b>=clipFar-EPS)break;
+    // Finish this cell's exit edge, then stop before any next-cell/BVH query.
+    // Keep the same cutoff and compositing order as the top-of-loop test.
+    if(acc.a>.997||b>=clipFar-EPS)break;
     float end=b;continuous=false;
     if(neighbor){
       float na,nb;vec3 nn;int nf;
-      if(cellInterval(next,ro,rd,end+EPS,clipFar,na,nb,nn,nf)&&na<=end+EPS*3.0){cell=next;a=end;b=nb;normal=nn;face=nf;continuous=keep&&nextVisible;continue;}
+      bool advanced=uFastConnections==1?connectedInterval(next,ro,rd,end+EPS,clipFar,face,na,nb,nn,nf):cellInterval(next,ro,rd,end+EPS,clipFar,na,nb,nn,nf);
+      if(advanced&&na<=end+EPS*3.0){cell=next;a=end;b=nb;normal=nn;face=nf;continuous=keep&&nextVisible;cornersReady=true;continue;}
     }
     found=findCell(ro,rd,inv,end+EPS*2.0,clipFar,cell,a,b,normal,face);
   }

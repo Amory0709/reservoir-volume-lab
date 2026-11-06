@@ -16,7 +16,7 @@ uniform vec2 uPorosityRange;
 uniform vec3 uEye, uRight, uUp, uForward;
 uniform vec3 uBoundsMin, uBoundsMax;
 uniform float uTanFov, uDensity, uEdgeWidth, uClipPosition, uPixelRatio;
-uniform int uProperty, uEdges, uInterior, uClipAxis, uNodeCount, uPorosityFilter;
+uniform int uProperty, uEdges, uInterior, uClipAxis, uNodeCount, uPorosityFilter, uLightMode;
 const float INF = 1e20;
 const float EPS = 0.000008;
 const ivec2 EDGES[12] = ivec2[12](ivec2(0,1),ivec2(1,2),ivec2(2,3),ivec2(3,0),ivec2(4,5),ivec2(5,6),ivec2(6,7),ivec2(7,4),ivec2(0,4),ivec2(1,5),ivec2(2,6),ivec2(3,7));
@@ -125,7 +125,7 @@ void gridLine(inout vec4 acc,vec3 p,int hex,float t,bool section,bool interior) 
 vec3 background(vec3 ro,vec3 rd,vec3 invDir) {
   vec2 uv=gl_FragCoord.xy/uResolution;
   float halo=exp(-3.2*dot((uv-vec2(.5,.48))*vec2(1.1,1.0),(uv-vec2(.5,.48))*vec2(1.1,1.0)));
-  vec3 bg=mix(vec3(.035,.054,.074),vec3(.075,.112,.145),halo);
+  vec3 bg=uLightMode==1?mix(vec3(.87,.90,.93),vec3(.98,.985,.99),halo):mix(vec3(.035,.054,.074),vec3(.075,.112,.145),halo);
   float floorZ=uBoundsMin.z-.25;
   if(rd.z < -.0001) {
     float t=(floorZ-ro.z)/rd.z;
@@ -134,9 +134,10 @@ vec3 background(vec3 ro,vec3 rd,vec3 invDir) {
     float pixel=max(.001,2.0*t*uTanFov/uResolution.y);
     vec2 grid=abs(fract(p+.5)-.5);
     float line=1.0-smoothstep(pixel*.22,pixel*.9,min(grid.x,grid.y));
-    bg=mix(bg,vec3(.15,.205,.246),line*distanceFade*.3);
+    vec3 gridColor=uLightMode==1?vec3(.56,.64,.69):vec3(.15,.205,.246);
+    bg=mix(bg,gridColor,line*distanceFade*.3);
     float shadow=exp(-.17*p.x*p.x-.36*p.y*p.y);
-    bg*=1.0-.17*shadow;
+    bg*=1.0-(uLightMode==1?.075:.17)*shadow;
   }
   return bg;
 }
@@ -195,8 +196,9 @@ void main() {
       if(uEdges==1 && (uInterior==1 || !visible) && (newHex || !visible)) gridLine(acc,ro+rd*a,hex,a,sectionStart,visible);
       // Exact homogeneous emission-absorption integral over this ray segment.
       // No uniform sample step and no interpolation between distinct cells.
-      float alpha=1.0-exp(-extinction*(b-a));
+      float alpha=uDensity>=28.0?1.0:1.0-exp(-extinction*(b-a));
       composite(acc,color,alpha);
+      if(acc.a>=1.0)break;
       int next=int(neighbors[face]);
       bool exposed=next<0;
       if(!exposed && uPorosityFilter==1 && next/6!=hex) exposed=!matchesPorosity(fetchAt(uCells,(next/6)*9+8));

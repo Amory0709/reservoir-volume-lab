@@ -5,8 +5,8 @@ import {largePorosityRange} from './large-grid.js';
 export class LargeVolumeRenderer extends VolumeRenderer {
   constructor(...args){super(...args);this.onMetrics=()=>{};this.quality='balanced';this.gpuMs=null;this.query=null;this.timerFrame=0;this.benchmarking=false;this.disposed=false;}
   async initialize(){
-    const gl=this.canvas.getContext('webgl2',{alpha:false,antialias:false,depth:false,stencil:false,powerPreference:'high-performance'});
-    if(!gl)throw new Error('当前浏览器未提供 WebGL 2，请启用硬件加速。');this.gl=gl;
+    const gl=this.canvas.getContext('webgl2',{alpha:false,antialias:false,depth:false,stencil:false,preserveDrawingBuffer:true,powerPreference:'high-performance'});
+    if(!gl)throw new Error('当前浏览器未提供 WebGL 2，请启用硬件加速。');this.gl=gl;this.clearBackground();
     const max3d=gl.getParameter(gl.MAX_3D_TEXTURE_SIZE);
     if(this.volume.dims.some(n=>n>max3d))throw new Error('此设备的三维纹理尺寸不足，请选择较小的网格规模。');
     const compile=(kind,source)=>{const shader=gl.createShader(kind);gl.shaderSource(shader,source);gl.compileShader(shader);return shader;};
@@ -19,7 +19,10 @@ export class LargeVolumeRenderer extends VolumeRenderer {
     const uploadStart=performance.now();
     const textures=this.textureSources?.(gl)??[['uAttributes',gl.TEXTURE_3D,this.volume.dims,this.volume.attributes,gl.RGBA8UI,gl.RGBA_INTEGER,gl.UNSIGNED_BYTE],['uBricks',gl.TEXTURE_3D,this.volume.coarse,this.volume.bricks,gl.RGBA8UI,gl.RGBA_INTEGER,gl.UNSIGNED_BYTE],['uAxes',gl.TEXTURE_2D,[this.volume.axisData.length/4,1],this.volume.axisData,gl.RGBA32F,gl.RGBA,gl.FLOAT],['uFold',gl.TEXTURE_2D,[this.volume.foldData.length/4,1],this.volume.foldData,gl.RGBA32F,gl.RGBA,gl.FLOAT]];
     gl.pixelStorei(gl.UNPACK_ALIGNMENT,1);
-    textures.forEach(([name,target,dims,data,internal,format,type],unit)=>{
+    let optionalFailed=false;
+    textures.forEach((source,unit)=>{
+      let [name,target,dims,data,internal,format,type,optional=false]=source;
+      if(optional&&optionalFailed){dims=[1,1];data=null;}
       const limit=gl.getParameter(target===gl.TEXTURE_3D?gl.MAX_3D_TEXTURE_SIZE:gl.MAX_TEXTURE_SIZE);
       if(dims.some(n=>n>limit))throw new Error('此设备的纹理尺寸不足，请选择较小规模。');
       const t=gl.createTexture();this.textures.push(t);gl.activeTexture(gl.TEXTURE0+unit);gl.bindTexture(target,t);
@@ -27,7 +30,18 @@ export class LargeVolumeRenderer extends VolumeRenderer {
       gl.texParameteri(target,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(target,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
       if(target===gl.TEXTURE_3D){gl.texParameteri(target,gl.TEXTURE_WRAP_R,gl.CLAMP_TO_EDGE);gl.texImage3D(target,0,internal,...dims,0,format,type,data);}
       else gl.texImage2D(target,0,internal,...dims,0,format,type,data);
-      if(gl.getError()!==gl.NO_ERROR)throw new Error('显存分配失败，请选择 1M 或关闭其他使用显卡的页面。');
+      if(gl.getError()!==gl.NO_ERROR){
+        if(!optional)throw new Error('显存分配失败，请选择 1M 或关闭其他使用显卡的页面。');
+        optionalFailed=true;
+        // Optional accelerators must not prevent the original grid from drawing.
+        for(let i=0;i<=unit;i++)if(textures[i][7]){
+          const [,kind,,,storage,channels,scalar]=textures[i];
+          gl.activeTexture(gl.TEXTURE0+i);gl.bindTexture(kind,this.textures[i]);
+          gl.texImage2D(kind,0,storage,1,1,0,channels,scalar,null);
+        }
+        if(gl.getError()!==gl.NO_ERROR)throw new Error('显存不足，无法建立最小渲染资源。');
+        this.onOptionalTextureFailure?.();
+      }
       gl.uniform1i(gl.getUniformLocation(program,name),unit);
     });
     const fence=gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE,0);gl.flush();
@@ -40,8 +54,11 @@ export class LargeVolumeRenderer extends VolumeRenderer {
       if(wait===gl.WAIT_FAILED)throw new Error('显卡数据上传失败，请选择较小规模重试。');
     }finally{gl.deleteSync(fence);}
     this.volume.stats.uploadMs=performance.now()-uploadStart;
+    // Explicit renderers may transfer a compact-cache source to their worker
+    // after the GPU upload fence, before CPU arrays are released here.
+    this.afterTextureUpload?.();
     for(const key of ['attributes','bricks','axisData','foldData','vertices','nodes','ranges','columnPillars','kInterfaces'])this.volume[key]=null;
-    const names=['uResolution','uEye','uRight','uUp','uForward','uBoundsMin','uBoundsMax','uTanFov','uDensity','uEdgeWidth','uPixelRatio','uClipPosition','uProperty','uEdges','uInterior','uClipAxis','uDimensions','uPorosityFilter','uPhi','uSkipBricks','uSplits','uNodeWidth','uNodeCount','uCellCount','uNoMatches','uSurfacePreview','uImported','uPropertyRange','uPropertyLog'];
+    const names=['uResolution','uEye','uRight','uUp','uForward','uBoundsMin','uBoundsMax','uTanFov','uDensity','uEdgeWidth','uPixelRatio','uClipPosition','uProperty','uEdges','uInterior','uClipAxis','uDimensions','uPorosityFilter','uPhi','uSkipBricks','uSplits','uNodeWidth','uNodeCount','uCellCount','uNoMatches','uSurfacePreview','uImported','uPropertyRange','uPropertyLog','uLightMode'];
     this.uniforms=Object.fromEntries(names.map(name=>[name,gl.getUniformLocation(program,name)]));
     gl.uniform3iv(this.uniforms.uDimensions,this.volume.dims);gl.uniform1i(this.uniforms.uSkipBricks,1);
     this.setGridUniforms?.();
@@ -59,13 +76,20 @@ export class LargeVolumeRenderer extends VolumeRenderer {
     const cap=pixelCap??(this.interacting&&!this.benchmarking?180000:({fast:240000,balanced:520000,detail:1200000}[this.quality]??520000));
     const resolution=Math.min(window.devicePixelRatio||1,2,Math.sqrt(cap/(rect.width*rect.height)));
     const width=Math.max(1,Math.round(rect.width*resolution)),height=Math.max(1,Math.round(rect.height*resolution));
-    if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}
+    const displayScale=this.displayPixelCap?Math.min(window.devicePixelRatio||1,2,Math.sqrt(this.displayPixelCap/(rect.width*rect.height))):resolution;
+    const displayWidth=Math.max(1,Math.round(rect.width*displayScale)),displayHeight=Math.max(1,Math.round(rect.height*displayScale));
+    if(canvas.width!==displayWidth||canvas.height!==displayHeight){
+      canvas.width=displayWidth;canvas.height=displayHeight;
+      // Resizing clears even a preserved buffer. Restore it before the first
+      // asynchronous surface batch or GPU fence can yield to the compositor.
+      if(this.present)this.present(this.front);else this.clearBackground();
+    }
     if(!this.modified)this.camera.distance=10.2/Math.min(1,rect.width/rect.height);
     gl.viewport(0,0,width,height);gl.useProgram(this.program);gl.bindVertexArray(this.vao);
     gl.uniform2f(u.uResolution,width,height);gl.uniform1f(u.uPixelRatio,width/rect.width);
     for(const [name,value]of Object.entries(this.basis()))gl.uniform3fv(u['u'+name[0].toUpperCase()+name.slice(1)],value);
     gl.uniform1f(u.uTanFov,Math.tan(21*Math.PI/180));gl.uniform1f(u.uDensity,28*(s.density/100)**2);
-    gl.uniform1f(u.uEdgeWidth,s.lineWidth);gl.uniform1i(u.uProperty,s.property);gl.uniform1i(u.uEdges,s.edges?1:0);gl.uniform1i(u.uInterior,s.interior?1:0);
+    gl.uniform1f(u.uEdgeWidth,s.lineWidth);gl.uniform1i(u.uProperty,s.property);gl.uniform1i(u.uEdges,s.edges?1:0);gl.uniform1i(u.uInterior,s.interior?1:0);gl.uniform1i(u.uLightMode,s.lightMode?1:0);
     gl.uniform1i(u.uPorosityFilter,s.porosityFilter?1:0);if(this.setPhi)this.setPhi(s);else gl.uniform2i(u.uPhi,...largePorosityRange(s.porosityMin,s.porosityMax));
     const axis=Math.max(0,s.clipAxis-1),{min,max}=this.volume.bounds;
     gl.uniform1i(u.uClipAxis,s.clipAxis);gl.uniform1f(u.uClipPosition,max[axis]-(max[axis]-min[axis])*s.clip/100);

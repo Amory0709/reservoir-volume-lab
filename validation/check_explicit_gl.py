@@ -37,6 +37,7 @@ draw=gl('glDrawArrays',None,[U,I,I]);finish=gl('glFinish',None,[]);read=gl('glRe
 def render(density=60,edges=True,axis=0,clip=0,prop=0,width=1.2,interior=True,filter_enabled=False,phi_min=8,phi_max=32,skip=True,surface=False,no_matches=False):
     if imported:
         info=meta['propertyInfo'][prop];u2(loc('uPropertyRange'),info['min'],info['max']);ui(loc('uPropertyLog'),int(info['log']))
+    ui(loc('uFastConnections'),int(os.environ.get('FAST_CONNECTIONS','1')));
     ui(loc('uSurfacePreview'),int(surface));ui(loc('uNoMatches'),int(no_matches));
     ui(loc('uProperty'),prop);ui(loc('uEdges'),int(edges));ui(loc('uInterior'),int(interior));ui(loc('uClipAxis'),axis)
     ui(loc('uPorosityFilter'),int(filter_enabled));u2(loc('uPhi'),phi_min/100,phi_max/100);ui(loc('uSkipBricks'),int(skip))

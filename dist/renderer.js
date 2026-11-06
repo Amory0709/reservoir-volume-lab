@@ -10,9 +10,11 @@ export class VolumeRenderer {
     this.onInteraction=()=>{};
   }
   async initialize() {
-    const gl=this.canvas.getContext('webgl2',{alpha:false,antialias:false,depth:false,stencil:false,powerPreference:'high-performance'});
+    // Uploads and tiled rendering yield across compositor frames. Keep the
+    // last complete image instead of letting the default buffer clear black.
+    const gl=this.canvas.getContext('webgl2',{alpha:false,antialias:false,depth:false,stencil:false,preserveDrawingBuffer:true,powerPreference:'high-performance'});
     if(!gl) throw new Error('当前浏览器未提供 WebGL 2。请启用硬件加速，或使用支持 WebGL 2 的浏览器打开。');
-    this.gl=gl;
+    this.gl=gl;this.clearBackground();
     const compile=(type,source)=>{const s=gl.createShader(type);gl.shaderSource(s,source);gl.compileShader(s);return s;};
     const vertex=compile(gl.VERTEX_SHADER,vertexShader),fragment=compile(gl.FRAGMENT_SHADER,fragmentShader);
     const program=gl.createProgram();gl.attachShader(program,vertex);gl.attachShader(program,fragment);gl.linkProgram(program);
@@ -33,7 +35,7 @@ export class VolumeRenderer {
       gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,source.width,source.height,0,gl.RGBA,gl.FLOAT,source.data);
       gl.uniform1i(gl.getUniformLocation(program,uniform),unit);
     });
-    this.uniforms=Object.fromEntries(['uResolution','uEye','uRight','uUp','uForward','uBoundsMin','uBoundsMax','uTanFov','uDensity','uEdgeWidth','uPixelRatio','uClipPosition','uProperty','uEdges','uInterior','uClipAxis','uNodeCount','uPorosityFilter','uPorosityRange'].map(k=>[k,gl.getUniformLocation(program,k)]));
+    this.uniforms=Object.fromEntries(['uResolution','uEye','uRight','uUp','uForward','uBoundsMin','uBoundsMax','uTanFov','uDensity','uEdgeWidth','uPixelRatio','uClipPosition','uProperty','uEdges','uInterior','uClipAxis','uNodeCount','uPorosityFilter','uPorosityRange','uLightMode'].map(k=>[k,gl.getUniformLocation(program,k)]));
     gl.disable(gl.DEPTH_TEST);gl.disable(gl.BLEND);gl.disable(gl.CULL_FACE);
     gl.uniform3fv(this.uniforms.uBoundsMin,this.volume.bounds.min);gl.uniform3fv(this.uniforms.uBoundsMax,this.volume.bounds.max);
     gl.uniform1i(this.uniforms.uNodeCount,this.volume.stats.bvhNodes);
@@ -41,6 +43,12 @@ export class VolumeRenderer {
     this.events=new AbortController();this.bindInput(this.events.signal);
     this.canvas.addEventListener('webglcontextlost',event=>{event.preventDefault();this.lost=true;this.onError(new Error('图形上下文中断。请点击“重新加载”恢复三维视图。'));},{signal:this.events.signal});
     return this;
+  }
+  clearBackground(){
+    const gl=this.gl,lightMode=this.settings?.lightMode??(this.canvas.ownerDocument?.documentElement.dataset.theme==='light');
+    gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.disable(gl.SCISSOR_TEST);
+    if(lightMode)gl.clearColor(.93,.95,.97,1);else gl.clearColor(.05,.08,.11,1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
   }
   basis() {
     const c=this.camera,cos=Math.cos(c.elevation);
@@ -64,7 +72,7 @@ export class VolumeRenderer {
     for(const [key,value] of Object.entries(basis)) gl.uniform3fv(u['u'+key[0].toUpperCase()+key.slice(1)],value);
     gl.uniform1f(u.uTanFov,Math.tan(21*Math.PI/180));
     gl.uniform1f(u.uDensity,28*Math.pow(s.density/100,2));
-    gl.uniform1f(u.uEdgeWidth,s.lineWidth);gl.uniform1i(u.uProperty,s.property);
+    gl.uniform1f(u.uEdgeWidth,s.lineWidth);gl.uniform1i(u.uProperty,s.property);gl.uniform1i(u.uLightMode,s.lightMode?1:0);
     gl.uniform1i(u.uPorosityFilter,s.porosityFilter?1:0);
     gl.uniform2f(u.uPorosityRange,...porosityBounds(s.porosityMin??8,s.porosityMax??32));
     gl.uniform1i(u.uEdges,s.edges?1:0);gl.uniform1i(u.uInterior,s.interior?1:0);
