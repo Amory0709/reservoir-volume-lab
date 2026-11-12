@@ -1,3 +1,25 @@
+# High-Performance 3D Visualization in the Browser
+
+**A graphics and systems engineering lab for large, irregular 3D datasets.** Built with JavaScript, WebGL2, an experimental WebGPU backend, Web Workers, and locally parsed scientific data. The initial dataset is a geological corner-point grid; the architecture challenges also apply to CAD, digital twins, scientific visualization, and data-intensive web software.
+
+**[Read the engineering case study →](docs/ENGINEERING_CASE_STUDY.md)** · [Detailed technical documentation (中文)](#显式角点油藏体渲染)
+
+## At a glance
+
+| Engineering challenge | Implemented approach |
+| --- | --- |
+| Responsive interaction vs expensive transparent rendering | Cached rasterized surfaces during camera interaction; full volume results when ready |
+| Outdated work after user input | Latest-request GPU queue with cancellation at safe batch boundaries |
+| High memory consumption | Transferable Worker buffers, compact surface indexes, shared GPU grid data and fallback paths |
+| Correctness under optimization | Numerical reference comparisons, pixel regressions and recorded trade-offs |
+| Backend evolution | Production WebGL2 path and explicitly experimental WebGPU compute path |
+
+The project documents **1M / 10M / 20M synthetic grid configurations** and a supported subset of **RESQML EPC/HDF5 imports**. These are dataset scales, **not guaranteed real-time FPS**. Local software-GLES profiling reported a decrease from **577.5 ms to 421.5 ms** for one 10M-cell, 1200 × 1000 off-screen draw/readback scenario, with byte-identical output. That result is **not** a browser or discrete-GPU speed claim; see the [measurement methodology and caveats](docs/ENGINEERING_CASE_STUDY.md#4-evidence-not-headline-fps).
+
+**Explore the engineering:** [data and worker ownership](dist/explicit-grid.js) · [GPU queue](dist/render-queue.js) · [volume rendering](dist/explicit-renderer.js) · [surface cache](dist/surface-cache.js) · [WebGPU experiment](dist/webgpu-renderer.js) · [validation](validation/)
+
+---
+
 # 显式角点油藏体渲染
 
 WebGL 2 油藏显示实验，支持 **RESQML EPC + HDF5 文件导入**。默认加载 **10M 显式角点合成模型**，可切换 1M、20M 压力模型和先前的紧凑模型。支持独立孔隙度筛选、属性着色、透明体积分、真实单元边线、XYZ 剖切和本机旋转性能测试。
